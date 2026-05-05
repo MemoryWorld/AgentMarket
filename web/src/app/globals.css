@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+:root {
+  --color-cream: #fff7b0;
+  --color-paper: #fffdf2;
+  --color-ink: #12263f;
+  --color-sea: #0b96ff;
+  --color-coral: #ff9022;
+  --color-gold: #ffd84d;
+  --color-fog: #d8e5f3;
+  --font-space-grotesk: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-dm-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+@theme inline {
+  --color-background: var(--color-paper);
+  --color-foreground: var(--color-ink);
+  --font-sans: var(--font-space-grotesk);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    linear-gradient(180deg, rgba(255, 247, 176, 0.58) 0%, rgba(255, 253, 242, 0.96) 38%, rgba(255, 243, 198, 0.78) 100%);
+  color: var(--color-ink);
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+a {
+  transition: color 180ms ease, opacity 180ms ease;
+}
+
+.surface-card {
+  border: 1px solid rgba(18, 38, 63, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 28px 80px rgba(18, 38, 63, 0.08);
+  backdrop-filter: blur(20px);
+}
+
+.eyebrow {
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.display-title {
+  font-family: var(--font-dm-serif), serif;
+  line-height: 0.95;
+}
+
+.field {
+  width: 100%;
+  border-radius: 1rem;
+  border: 1px solid rgba(18, 38, 63, 0.12);
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.9rem 1rem;
+  outline: none;
+}
+
+.field::placeholder {
+  color: rgba(18, 38, 63, 0.45);
+}
+
+.field:focus {
+  border-color: var(--color-sea);
+  box-shadow: 0 0 0 4px rgba(11, 150, 255, 0.16);
+}
+
+.button-primary {
+  border-radius: 999px;
+  background: var(--color-gold);
+  color: var(--color-ink);
+  padding: 0.9rem 1.2rem;
+  font-weight: 700;
+  box-shadow: 0 16px 32px rgba(255, 216, 77, 0.34);
+  transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.button-primary:hover {
+  background: #ffcf24;
+  box-shadow: 0 18px 36px rgba(255, 216, 77, 0.38);
+  transform: translateY(-1px);
+}
+
+.button-secondary {
+  border-radius: 999px;
+  border: 1px solid rgba(18, 38, 63, 0.14);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--color-ink);
+  padding: 0.85rem 1.2rem;
+  font-weight: 700;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.button-secondary:hover {
+  border-color: rgba(18, 38, 63, 0.24);
+  background: rgba(255, 255, 255, 0.96);
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
+}
+
+.price-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(18, 38, 63, 0.08);
+  background: rgba(255, 216, 77, 0.38);
+  color: var(--color-ink);
+  padding: 0.5rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.soft-panel {
+  border: 1px solid rgba(18, 38, 63, 0.08);
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 18px 40px rgba(18, 38, 63, 0.06);
+}
+
+.sun-panel {
+  border: 1px solid rgba(255, 216, 77, 0.62);
+  background: linear-gradient(180deg, rgba(255, 216, 77, 0.94) 0%, rgba(255, 243, 178, 0.96) 100%);
+  box-shadow: 0 22px 48px rgba(255, 216, 77, 0.26);
+}
+
+.sky-panel {
+  border: 1px solid rgba(11, 150, 255, 0.14);
+  background: linear-gradient(180deg, rgba(227, 245, 255, 0.94) 0%, rgba(255, 255, 255, 0.86) 100%);
+  box-shadow: 0 18px 42px rgba(11, 150, 255, 0.08);
+}
+
+.step-pill {
+  display: inline-flex;
+  min-width: 2.25rem;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(18, 38, 63, 0.92);
+  color: white;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(18, 38, 63, 0.08);
+  background: rgba(255, 255, 255, 0.84);
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
