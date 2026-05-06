@@ -33,6 +33,7 @@ export default function RootLayout({
             <nav className="flex items-center gap-5 text-sm font-medium">
               <Link href="/" className="hover:text-[var(--color-sea)]">Browse</Link>
               <Link href="/sell" className="hover:text-[var(--color-sea)]">Sell with AI</Link>
+              <Link href="/control" className="hover:text-[var(--color-sea)]">Control Room</Link>
               <a href={`${backendRoot}/openapi.json`} className="hover:text-[var(--color-sea)]">OpenAPI</a>
             </nav>
           </div>

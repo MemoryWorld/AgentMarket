@@ -1,5 +1,8 @@
 from app.models.entities import (
     AIJob,
+    ActionReceipt,
+    AgentGrant,
+    ApprovalRequest,
     Category,
     City,
     CreditWallet,
@@ -8,6 +11,9 @@ from app.models.entities import (
     Listing,
     ListingDraft,
     ListingImage,
+    MessageEvent,
+    MessageThread,
+    Offer,
     Order,
     PersonalAccessToken,
     Report,
@@ -18,6 +24,9 @@ from app.models.entities import (
 
 __all__ = [
     "AIJob",
+    "ActionReceipt",
+    "AgentGrant",
+    "ApprovalRequest",
     "Category",
     "City",
     "CreditWallet",
@@ -26,6 +35,9 @@ __all__ = [
     "Listing",
     "ListingDraft",
     "ListingImage",
+    "MessageEvent",
+    "MessageThread",
+    "Offer",
     "Order",
     "PersonalAccessToken",
     "Report",

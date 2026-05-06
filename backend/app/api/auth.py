@@ -9,7 +9,8 @@ from app.api.deps import AuthActor, get_current_actor
 from app.core.config import get_settings
 from app.core.security import create_access_token, create_personal_access_token, generate_otp, sha256_text, utcnow
 from app.db.session import get_session
-from app.models import CreditWallet, EmailOTP, PersonalAccessToken, SellerProfile, UsageLedger, User
+from app.models import AgentGrant, CreditWallet, EmailOTP, PersonalAccessToken, SellerProfile, UsageLedger, User
+from app.models.entities import AgentGrantStatus
 from app.schemas.domain import (
     AuthTokenResponse,
     OTPRequest,
@@ -167,6 +168,10 @@ async def revoke_pat(
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found.")
     record.revoked = True
+    grant = await session.scalar(select(AgentGrant).where(AgentGrant.personal_access_token_id == record.id))
+    if grant:
+        grant.status = AgentGrantStatus.revoked.value
+        grant.revoked_at = utcnow()
     await session.commit()
     await session.refresh(record)
     return PATResponse.model_validate(record)

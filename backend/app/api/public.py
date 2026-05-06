@@ -63,7 +63,14 @@ async def list_listings(
     filters = [Listing.visibility == "public", Listing.status == "published"]
     if q:
         wildcard = f"%{q.strip()}%"
-        filters.append(or_(Listing.title.ilike(wildcard), Listing.description.ilike(wildcard), Listing.brand.ilike(wildcard)))
+        filters.append(
+            or_(
+                Listing.title.ilike(wildcard),
+                Listing.product_name.ilike(wildcard),
+                Listing.description.ilike(wildcard),
+                Listing.brand.ilike(wildcard),
+            )
+        )
     if category_slug:
         filters.append(Listing.category_slug == category_slug)
     if city_slug:

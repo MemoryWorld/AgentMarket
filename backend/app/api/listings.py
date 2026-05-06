@@ -22,6 +22,7 @@ from app.schemas.domain import (
 )
 from app.services.ai import AIService
 from app.services.bootstrap import slugify
+from app.services.marketplace_ops import publish_draft_listing, validate_publishable_draft
 from app.services.storage import StorageService
 
 
@@ -86,11 +87,15 @@ async def create_draft(
     draft = ListingDraft(
         seller_id=actor.user.id,
         title=payload.title,
+        product_name=payload.product_name,
         description=payload.description,
         category_slug=payload.category_slug,
         condition=payload.condition,
+        condition_score=payload.condition_score,
         brand=payload.brand,
         color=payload.color,
+        approx_dimensions_text=payload.approx_dimensions_text,
+        intended_use=payload.intended_use,
         attributes=payload.attributes,
         asking_price_cents=payload.asking_price_cents,
         currency_code=payload.currency_code or get_settings().default_currency,
@@ -98,7 +103,7 @@ async def create_draft(
     )
     session.add(draft)
     await session.commit()
-    await session.refresh(draft)
+    draft = await _get_draft_for_seller(session, actor.user.id, draft.id)
     return DraftResponse.model_validate(draft)
 
 
@@ -143,15 +148,20 @@ async def ai_autofill_draft(
     draft = ListingDraft(
         seller_id=actor.user.id,
         title=suggestion.title,
+        product_name=suggestion.product_name,
         description=suggestion.description,
         category_slug=_normalize_category_slug(suggestion.category_path, available),
         condition=suggestion.condition,
+        condition_score=suggestion.condition_score,
         brand=suggestion.brand,
         color=suggestion.color,
+        approx_dimensions_text=suggestion.approx_dimensions_text,
+        intended_use=suggestion.intended_use,
         attributes=suggestion.attributes,
         suggested_price_cents=round(suggestion.suggested_price * 100),
         currency_code=suggestion.currency_code,
         city_slug=city_slug or actor.user.city_slug,
+        status=ListingWorkflowStatus.pending_review.value,
         ai_confidence=suggestion.price_confidence,
         ai_missing_fields=suggestion.missing_fields,
         ai_safety_flags=suggestion.safety_flags,
@@ -261,39 +271,11 @@ async def publish_draft(
     session: AsyncSession = Depends(get_session),
 ) -> ListingResponse:
     draft = await _get_draft_for_seller(session, actor.user.id, draft_id)
-    required_fields = [draft.title, draft.description, draft.category_slug, draft.asking_price_cents, draft.city_slug]
-    if any(value in (None, "") for value in required_fields):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Draft is missing required publish fields.")
-
-    base_slug = slugify(draft.title or "listing")
-    slug = base_slug
-    counter = 1
-    while await _get_listing(session, slug):
-        counter += 1
-        slug = f"{base_slug}-{counter}"
-
-    listing = Listing(
-        seller_id=actor.user.id,
-        draft_id=draft.id,
-        slug=slug,
-        title=draft.title or "Untitled",
-        description=draft.description or "",
-        category_slug=draft.category_slug or "electronics",
-        condition=draft.condition,
-        brand=draft.brand,
-        color=draft.color,
-        attributes=draft.attributes,
-        asking_price_cents=draft.asking_price_cents or draft.suggested_price_cents or 0,
-        currency_code=draft.currency_code,
-        city_slug=draft.city_slug or actor.user.city_slug or "sydney-au",
-        ai_confidence=draft.ai_confidence,
-        ai_source_model=draft.ai_source_model,
-    )
-    session.add(listing)
-    await session.flush()
-    for image in draft.images:
-        image.listing_id = listing.id
-    draft.status = ListingWorkflowStatus.published.value
+    try:
+        validate_publishable_draft(draft)
+        listing = await publish_draft_listing(session, actor.user.id, draft)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await session.commit()
     listing = await _get_listing(session, listing.id)
     return ListingResponse.model_validate(listing)

@@ -47,6 +47,28 @@ async def create_order(
     return OrderResponse.model_validate(order)
 
 
+@router.get("", response_model=list[OrderResponse])
+async def list_orders(
+    role: str | None = None,
+    status_filter: str | None = None,
+    actor: AuthActor = Depends(require_scopes("orders:write")),
+    session: AsyncSession = Depends(get_session),
+) -> list[OrderResponse]:
+    stmt = (
+        select(Order)
+        .where(or_(Order.buyer_id == actor.user.id, Order.seller_id == actor.user.id))
+        .order_by(Order.updated_at.desc())
+    )
+    if role == "seller":
+        stmt = stmt.where(Order.seller_id == actor.user.id)
+    elif role == "buyer":
+        stmt = stmt.where(Order.buyer_id == actor.user.id)
+    if status_filter:
+        stmt = stmt.where(Order.status == status_filter)
+    orders = (await session.scalars(stmt.limit(100))).all()
+    return [OrderResponse.model_validate(order) for order in orders]
+
+
 @router.patch("/{order_id}/address", response_model=OrderResponse)
 async def submit_address(
     order_id: str,

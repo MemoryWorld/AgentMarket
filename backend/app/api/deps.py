@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_access_token, sha256_text, utcnow
 from app.db.session import get_session
-from app.models import PersonalAccessToken, User
+from app.models import AgentGrant, PersonalAccessToken, User
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -19,6 +19,8 @@ class AuthActor:
     user: User
     scopes: set[str]
     token_type: str
+    pat: PersonalAccessToken | None = None
+    agent_grant: AgentGrant | None = None
 
 
 async def get_current_actor(
@@ -37,14 +39,30 @@ async def get_current_actor(
         user = await session.get(User, pat.user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token user no longer exists.")
+        grant = await session.scalar(select(AgentGrant).where(AgentGrant.personal_access_token_id == pat.id))
+        if grant and grant.status == "revoked":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Agent grant has been revoked.")
         await session.commit()
-        return AuthActor(user=user, scopes=set(pat.scopes or []), token_type="pat")
+        return AuthActor(user=user, scopes=set(pat.scopes or []), token_type="pat", pat=pat, agent_grant=grant)
 
     payload = decode_access_token(token)
     user = await session.get(User, payload["sub"])
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found.")
-    default_scopes = {"listings:write", "orders:write", "ai:generate"}
+    default_scopes = {
+        "listings:write",
+        "orders:write",
+        "ai:generate",
+        "messages:read",
+        "messages:write",
+        "offers:read",
+        "offers:write",
+        "approvals:read",
+        "approvals:write",
+        "grants:read",
+        "grants:write",
+        "receipts:read",
+    }
     return AuthActor(user=user, scopes=default_scopes, token_type="access")
 
 

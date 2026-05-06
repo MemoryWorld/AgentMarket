@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { apiUrl } from "@/lib/api";
-import { Draft, Wallet } from "@/lib/types";
+import { Category, City, Draft, Wallet } from "@/lib/types";
 
 const TOKEN_KEY = "agent-marketplace-access-token";
 
@@ -26,6 +26,11 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error. Please try again.";
 }
 
+function normalizeOptionalText(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
 export function SellStudio() {
   const [token, setToken] = useState<string>("");
   const [email, setEmail] = useState("seller@example.com");
@@ -34,10 +39,19 @@ export function SellStudio() {
   const [debugCode, setDebugCode] = useState<string>("");
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [cities, setCities] = useState<City[]>([]);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
   const [status, setStatus] = useState<string>("Authenticate to start creating listings.");
   const [title, setTitle] = useState("");
+  const [productName, setProductName] = useState("");
   const [description, setDescription] = useState("");
+  const [categorySlug, setCategorySlug] = useState("electronics");
+  const [conditionLabel, setConditionLabel] = useState("Used - Good");
+  const [conditionScore, setConditionScore] = useState("7");
+  const [brand, setBrand] = useState("");
+  const [approxDimensionsText, setApproxDimensionsText] = useState("");
+  const [intendedUse, setIntendedUse] = useState("");
   const [citySlug, setCitySlug] = useState("sydney-au");
   const [askingPrice, setAskingPrice] = useState("4900");
   const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
@@ -48,13 +62,28 @@ export function SellStudio() {
     setActiveDraft(draft);
     if (!draft) {
       setTitle("");
+      setProductName("");
       setDescription("");
+      setCategorySlug("electronics");
+      setConditionLabel("Used - Good");
+      setConditionScore("7");
+      setBrand("");
+      setApproxDimensionsText("");
+      setIntendedUse("");
       setCitySlug("sydney-au");
       setAskingPrice("4900");
       return;
     }
+
     setTitle(draft.title ?? "");
+    setProductName(draft.product_name ?? draft.title ?? "");
     setDescription(draft.description ?? "");
+    setCategorySlug(draft.category_slug ?? "electronics");
+    setConditionLabel(draft.condition ?? "Used - Good");
+    setConditionScore(String(draft.condition_score ?? 7));
+    setBrand(draft.brand ?? "");
+    setApproxDimensionsText(draft.approx_dimensions_text ?? "");
+    setIntendedUse(draft.intended_use ?? "");
     setCitySlug(draft.city_slug ?? "sydney-au");
     setAskingPrice(String(draft.asking_price_cents ?? draft.suggested_price_cents ?? 4900));
   }
@@ -63,6 +92,14 @@ export function SellStudio() {
     const parsed = Number.parseInt(askingPrice, 10);
     if (Number.isNaN(parsed) || parsed < 0) {
       throw new Error("Enter a valid asking price in cents.");
+    }
+    return parsed;
+  }
+
+  function parseConditionScoreInput() {
+    const parsed = Number.parseInt(conditionScore, 10);
+    if (Number.isNaN(parsed) || parsed < 1 || parsed > 10) {
+      throw new Error("Condition score must be a number from 1 to 10.");
     }
     return parsed;
   }
@@ -101,11 +138,28 @@ export function SellStudio() {
   }
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const [nextCategories, nextCities] = await Promise.all([
+          readJson<Category[]>(apiUrl("/categories")),
+          readJson<City[]>(apiUrl("/cities")),
+        ]);
+        setCategories(nextCategories);
+        setCities(nextCities);
+      } catch {
+        // Keep fallback text inputs/select values if public metadata is unavailable.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     const stored = window.localStorage.getItem(TOKEN_KEY);
-    if (stored) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setToken(stored);
+    if (!stored) {
+      return;
     }
+    queueMicrotask(() => {
+      setToken(stored);
+    });
   }, []);
 
   useEffect(() => {
@@ -214,8 +268,14 @@ export function SellStudio() {
         },
         body: JSON.stringify({
           title,
+          product_name: productName,
           description,
-          category_slug: "electronics",
+          category_slug: categorySlug,
+          condition: normalizeOptionalText(conditionLabel),
+          condition_score: parseConditionScoreInput(),
+          brand: normalizeOptionalText(brand),
+          approx_dimensions_text: normalizeOptionalText(approxDimensionsText),
+          intended_use: normalizeOptionalText(intendedUse),
           asking_price_cents: parsePriceInput(),
           currency_code: "USD",
           city_slug: citySlug,
@@ -248,7 +308,7 @@ export function SellStudio() {
         body: formData,
       });
       setPublishedSlug(null);
-      setStatus("AI autofill completed. Review the draft before publishing.");
+      setStatus("AI autofill completed. Review every field before publishing.");
       await refreshDrafts(token, draft.id);
     });
   }
@@ -271,8 +331,14 @@ export function SellStudio() {
         },
         body: JSON.stringify({
           title,
+          product_name: productName,
           description,
-          category_slug: activeDraft.category_slug ?? "electronics",
+          category_slug: categorySlug,
+          condition: normalizeOptionalText(conditionLabel),
+          condition_score: parseConditionScoreInput(),
+          brand: normalizeOptionalText(brand),
+          approx_dimensions_text: normalizeOptionalText(approxDimensionsText),
+          intended_use: normalizeOptionalText(intendedUse),
           city_slug: citySlug,
           asking_price_cents: parsePriceInput(),
         }),
@@ -339,16 +405,16 @@ export function SellStudio() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div>
               <p className="eyebrow text-[var(--color-sea)]">Seller Studio</p>
-              <h1 className="display-title mt-3 text-5xl text-[var(--color-ink)]">Ship a listing in one bright workflow.</h1>
+              <h1 className="display-title mt-3 text-5xl text-[var(--color-ink)]">Review every fact before the listing goes live.</h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-[rgba(18,38,63,0.74)]">
-                Request a debug OTP, create a draft manually or from photos, then spend credits to generate a cleaner sale image before publishing.
+                Upload photos, let AI prefill the listing, then check product name, brand, condition score, size, and best use before publishing.
               </p>
             </div>
 
             <div className="sun-panel max-w-sm rounded-[1.7rem] p-5">
-              <p className="eyebrow text-[rgba(18,38,63,0.68)]">MVP pipeline</p>
+              <p className="eyebrow text-[rgba(18,38,63,0.68)]">Human-first pipeline</p>
               <p className="mt-3 text-sm leading-7 text-[rgba(18,38,63,0.74)]">
-                OTP → draft → edit → AI image → publish. The whole flow stays visible in one page so the MVP is easy to demo.
+                OTP → draft → AI prefill → human review → optional sale image → publish. The product facts stay explicit instead of hiding in JSON.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className="price-chip">Drafts: {drafts.length}</span>
@@ -362,17 +428,17 @@ export function SellStudio() {
             <div className="soft-panel rounded-[1.5rem] p-4">
               <span className="step-pill">01</span>
               <p className="mt-3 text-lg font-semibold">Authenticate seller</p>
-              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">Request a debug OTP and store the bearer token locally for repeat demos.</p>
+              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">Request a debug OTP and cache the bearer token for local testing.</p>
             </div>
             <div className="soft-panel rounded-[1.5rem] p-4">
               <span className="step-pill">02</span>
               <p className="mt-3 text-lg font-semibold">Build the draft</p>
-              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">Start manually or auto-fill from photos to prove the AI-assisted listing path.</p>
+              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">Start manually or from photos, but always keep product facts editable in one visible form.</p>
             </div>
             <div className="soft-panel rounded-[1.5rem] p-4">
               <span className="step-pill">03</span>
-              <p className="mt-3 text-lg font-semibold">Polish and publish</p>
-              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">Review structured output, generate a sale image, then send the listing live.</p>
+              <p className="mt-3 text-lg font-semibold">Publish after review</p>
+              <p className="mt-2 text-sm leading-6 text-[rgba(18,38,63,0.7)]">AI suggestions stay as a draft until a human verifies the listing and attached images.</p>
             </div>
           </div>
 
@@ -380,7 +446,7 @@ export function SellStudio() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="eyebrow text-[rgba(18,38,63,0.68)]">Seller status</p>
-                <p className="mt-2 text-sm break-all text-[rgba(18,38,63,0.82)]">{token ? `Bearer ${token}` : "Not authenticated yet."}</p>
+                <p className="mt-2 break-all text-sm text-[rgba(18,38,63,0.82)]">{token ? `Bearer ${token}` : "Not authenticated yet."}</p>
                 <p className="mt-3 text-sm text-[rgba(18,38,63,0.76)]">{status}</p>
               </div>
               {publishedSlug ? (
@@ -438,7 +504,18 @@ export function SellStudio() {
                   <p className="text-sm text-[rgba(18,38,63,0.66)]">The token is cached in local storage for this browser session.</p>
                 </div>
               </div>
-              <input className="field mt-4" value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="6-digit OTP" />
+              {cities.length ? (
+                <select className="field mt-4" value={citySlug} onChange={(event) => setCitySlug(event.target.value)}>
+                  {cities.map((city) => (
+                    <option key={city.slug} value={city.slug}>
+                      {city.display_name} ({city.country_code})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input className="field mt-4" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
+              )}
+              <input className="field mt-3" value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="6-digit OTP" />
               <button className="button-primary mt-4 w-full" type="submit" disabled={!!busyAction}>
                 {isBusy("verify-otp") ? "Verifying..." : "Verify sign-in"}
               </button>
@@ -451,15 +528,33 @@ export function SellStudio() {
                 <span className="step-pill">03</span>
                 <div>
                   <p className="font-semibold">Start manually</p>
-                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Use this when you want full control over the initial listing copy.</p>
+                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Use this when you want explicit control over the initial listing facts.</p>
                 </div>
               </div>
-              <input className="field mt-4" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Listing title" />
+              <input className="field mt-4" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Marketplace title" />
+              <input className="field mt-3" value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Actual product name" />
               <textarea className="field mt-3 min-h-28" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description" />
+              {categories.length ? (
+                <select className="field mt-3" value={categorySlug} onChange={(event) => setCategorySlug(event.target.value)}>
+                  {categories.map((category) => (
+                    <option key={category.slug} value={category.slug}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input className="field mt-3" value={categorySlug} onChange={(event) => setCategorySlug(event.target.value)} placeholder="category slug" />
+              )}
               <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <input className="field" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
-                <input className="field" value={askingPrice} onChange={(event) => setAskingPrice(event.target.value)} placeholder="price cents" />
+                <input className="field" value={conditionLabel} onChange={(event) => setConditionLabel(event.target.value)} placeholder="Condition label" />
+                <input className="field" value={conditionScore} onChange={(event) => setConditionScore(event.target.value)} placeholder="Condition score 1-10" />
               </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <input className="field" value={brand} onChange={(event) => setBrand(event.target.value)} placeholder="Brand" />
+                <input className="field" value={askingPrice} onChange={(event) => setAskingPrice(event.target.value)} placeholder="Price cents" />
+              </div>
+              <input className="field mt-3" value={approxDimensionsText} onChange={(event) => setApproxDimensionsText(event.target.value)} placeholder="Approximate dimensions" />
+              <input className="field mt-3" value={intendedUse} onChange={(event) => setIntendedUse(event.target.value)} placeholder="Best use / intended use" />
               <button className="button-primary mt-4 w-full" type="submit" disabled={!token || !!busyAction}>
                 {isBusy("create-draft") ? "Creating..." : "Create draft"}
               </button>
@@ -470,10 +565,20 @@ export function SellStudio() {
                 <span className="step-pill">04</span>
                 <div>
                   <p className="font-semibold">Auto-fill from photos</p>
-                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Upload one or more product photos and let the model draft the listing.</p>
+                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Upload one or more product photos and let the model draft the structured listing.</p>
                 </div>
               </div>
-              <input className="field mt-4" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
+              {cities.length ? (
+                <select className="field mt-4" value={citySlug} onChange={(event) => setCitySlug(event.target.value)}>
+                  {cities.map((city) => (
+                    <option key={city.slug} value={city.slug}>
+                      {city.display_name} ({city.country_code})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input className="field mt-4" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
+              )}
               <label className="mt-3 block rounded-[1rem] border border-dashed border-[rgba(18,38,63,0.2)] bg-white/82 px-4 py-6 text-sm text-[rgba(18,38,63,0.72)]">
                 <span className="block">Upload one or more item photos</span>
                 <input className="mt-3 block w-full text-sm" type="file" accept="image/*" multiple onChange={(event) => setUploadFiles(event.target.files)} />
@@ -490,16 +595,23 @@ export function SellStudio() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="eyebrow text-[var(--color-coral)]">Draft Review</p>
-            <h2 className="display-title mt-2 text-4xl">Refine, generate, publish.</h2>
+            <h2 className="display-title mt-2 text-4xl">Refine, validate, publish.</h2>
           </div>
-          <button className="button-secondary" type="button" onClick={() => void runBusyAction("refresh-drafts", async () => {
-            if (!token) {
-              throw new Error("Authenticate before refreshing drafts.");
+          <button
+            className="button-secondary"
+            type="button"
+            onClick={() =>
+              void runBusyAction("refresh-drafts", async () => {
+                if (!token) {
+                  throw new Error("Authenticate before refreshing drafts.");
+                }
+                await refreshDrafts(token, activeDraft?.id);
+                await refreshWallet(token);
+                setStatus("Drafts refreshed.");
+              })
             }
-            await refreshDrafts(token, activeDraft?.id);
-            await refreshWallet(token);
-            setStatus("Drafts refreshed.");
-          })} disabled={!token || !!busyAction}>
+            disabled={!token || !!busyAction}
+          >
             {isBusy("refresh-drafts") ? "Refreshing..." : "Refresh drafts"}
           </button>
         </div>
@@ -515,18 +627,55 @@ export function SellStudio() {
                 applyDraft(draft);
               }}
             >
-              {draft.title ?? "Untitled draft"}
+              {draft.title ?? draft.product_name ?? "Untitled draft"}
             </button>
           ))}
         </div>
 
         {activeDraft ? (
           <form onSubmit={saveDraftEdits} className="mt-6 space-y-4">
-            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Listing title" />
+            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Marketplace title" />
+            <input className="field" value={productName} onChange={(event) => setProductName(event.target.value)} placeholder="Actual product name" />
             <textarea className="field min-h-32" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description" />
+
             <div className="grid gap-3 md:grid-cols-2">
-              <input className="field" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
-              <input className="field" value={askingPrice} onChange={(event) => setAskingPrice(event.target.value)} placeholder="price cents" />
+              {categories.length ? (
+                <select className="field" value={categorySlug} onChange={(event) => setCategorySlug(event.target.value)}>
+                  {categories.map((category) => (
+                    <option key={category.slug} value={category.slug}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input className="field" value={categorySlug} onChange={(event) => setCategorySlug(event.target.value)} placeholder="category slug" />
+              )}
+              {cities.length ? (
+                <select className="field" value={citySlug} onChange={(event) => setCitySlug(event.target.value)}>
+                  {cities.map((city) => (
+                    <option key={city.slug} value={city.slug}>
+                      {city.display_name} ({city.country_code})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input className="field" value={citySlug} onChange={(event) => setCitySlug(event.target.value)} placeholder="city slug" />
+              )}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <input className="field" value={conditionLabel} onChange={(event) => setConditionLabel(event.target.value)} placeholder="Condition label" />
+              <input className="field" value={conditionScore} onChange={(event) => setConditionScore(event.target.value)} placeholder="Condition score 1-10" />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <input className="field" value={brand} onChange={(event) => setBrand(event.target.value)} placeholder="Brand" />
+              <input className="field" value={askingPrice} onChange={(event) => setAskingPrice(event.target.value)} placeholder="Price cents" />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <input className="field" value={approxDimensionsText} onChange={(event) => setApproxDimensionsText(event.target.value)} placeholder="Approximate dimensions" />
+              <input className="field" value={intendedUse} onChange={(event) => setIntendedUse(event.target.value)} placeholder="Best use / intended use" />
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -539,13 +688,26 @@ export function SellStudio() {
               <div className="sky-panel rounded-[1.4rem] p-4 text-sm">
                 <p><strong>Missing fields:</strong> {activeDraft.ai_missing_fields.join(", ") || "none"}</p>
                 <p className="mt-2"><strong>Safety flags:</strong> {activeDraft.ai_safety_flags.join(", ") || "none"}</p>
-                <p className="mt-2"><strong>City slug:</strong> {activeDraft.city_slug ?? "n/a"}</p>
+                <p className="mt-2"><strong>Product name:</strong> {activeDraft.product_name ?? "n/a"}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="sun-panel rounded-[1.4rem] p-4 text-sm">
+                <p><strong>Condition label:</strong> {activeDraft.condition ?? "n/a"}</p>
+                <p className="mt-2"><strong>Condition score:</strong> {activeDraft.condition_score ? `${activeDraft.condition_score}/10` : "n/a"}</p>
+                <p className="mt-2"><strong>Brand:</strong> {activeDraft.brand ?? "n/a"}</p>
+              </div>
+              <div className="soft-panel rounded-[1.4rem] p-4 text-sm">
+                <p><strong>Approx. size:</strong> {activeDraft.approx_dimensions_text ?? "n/a"}</p>
+                <p className="mt-2"><strong>Best use:</strong> {activeDraft.intended_use ?? "n/a"}</p>
+                <p className="mt-2"><strong>City:</strong> {activeDraft.city_slug ?? "n/a"}</p>
               </div>
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
               <button className="button-secondary" type="submit" disabled={!!busyAction}>
-                {isBusy("save-draft") ? "Saving..." : "Save edits"}
+                {isBusy("save-draft") ? "Saving..." : "Save review edits"}
               </button>
               <button className="button-secondary" type="button" onClick={generateImage} disabled={!!busyAction}>
                 {isBusy("generate-image") ? "Generating image..." : "Generate sale image"}
@@ -559,7 +721,7 @@ export function SellStudio() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {activeDraft.images.map((image) => (
                   <div key={image.id} className="overflow-hidden rounded-[1.3rem] border border-[rgba(18,38,63,0.08)] bg-white">
-                    <img src={image.public_url} alt={activeDraft.title ?? "Draft image"} className="h-52 w-full object-cover" />
+                    <img src={image.public_url} alt={activeDraft.product_name ?? activeDraft.title ?? "Draft image"} className="h-52 w-full object-cover" />
                     <div className="px-4 py-3 text-sm">
                       <p className="font-semibold">{image.provenance === "ai_generated" ? "AI-generated sale image" : "Original upload"}</p>
                       <p className="mt-1 text-[rgba(18,38,63,0.68)]">{image.width ?? "?"} × {image.height ?? "?"}</p>
@@ -569,7 +731,7 @@ export function SellStudio() {
               </div>
             ) : (
               <div className="rounded-[1.5rem] border border-dashed border-[rgba(18,38,63,0.18)] p-8 text-sm text-[rgba(18,38,63,0.65)]">
-                No images attached yet. Upload seller photos or run AI image generation after saving the draft.
+                No images attached yet. Upload seller photos or run AI image generation before publishing.
               </div>
             )}
           </form>

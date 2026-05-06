@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.session import Base, engine
+from app.db.migrations import upgrade_database
 from app.models import Category, City, CreditWallet, Listing, SellerProfile, User
 
 
@@ -39,8 +39,7 @@ def slugify(value: str) -> str:
 
 
 async def init_database() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await upgrade_database()
 
 
 async def seed_reference_data(session: AsyncSession) -> None:
@@ -71,11 +70,15 @@ async def seed_reference_data(session: AsyncSession) -> None:
                 seller_id=demo_user.id,
                 slug="demo-vintage-camera",
                 title="Vintage 35mm Camera",
+                product_name="35mm Film Camera Body",
                 description="Film-tested camera body with strap, light cosmetic wear, and a clean lens mount.",
                 category_slug="electronics",
                 condition="Used - Good",
+                condition_score=7,
                 brand="RetroCam",
                 color="Black",
+                approx_dimensions_text="15 x 9 x 6 cm",
+                intended_use="Film photography and display",
                 attributes={"lens_mount": "Manual", "bundle": "strap included"},
                 asking_price_cents=18900,
                 currency_code="USD",

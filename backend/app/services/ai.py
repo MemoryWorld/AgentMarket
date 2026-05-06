@@ -47,8 +47,12 @@ class AIService:
             {
                 "type": "input_text",
                 "text": (
-                    "Return a structured JSON listing suggestion for a used-item marketplace. "
-                    "Only describe facts visible in the photos. Do not invent missing brand or condition details. "
+                    "Return a structured listing suggestion for a used-item marketplace. "
+                    "Use only facts visible in the photos. "
+                    "If brand, exact size, or intended use cannot be supported from the photos, return null for those fields and include the field name in missing_fields. "
+                    "Set condition_score on a 1-10 scale where 10 is close to new and 1 is heavily worn. "
+                    "Use title as marketplace copy and product_name as the actual product name. "
+                    "Do not invent model numbers, logos, exact dimensions, or condition details. "
                     f"Prefer prices in {currency_code}. "
                     f"Category hint: {category_hint or 'unknown'}."
                 ),
@@ -125,16 +129,20 @@ class AIService:
         title = stem if stem != "Used Item" else "Second-hand item bundle"
         return ListingAutofillOutput(
             title=title,
+            product_name=title,
             description=f"Pre-filled from uploaded photos. {title} looks suitable for a quick resale listing.",
             category_path=category,
             condition="Used - Good",
+            condition_score=7,
             brand=None,
             color="Mixed",
+            approx_dimensions_text=None,
+            intended_use=None,
             attributes={"autofill_mode": "mock", "photo_count": len(image_paths)},
             suggested_price=49.0,
             currency_code=currency_code,
             price_confidence=0.52,
-            missing_fields=["brand", "exact dimensions"],
+            missing_fields=["brand", "approx_dimensions_text", "intended_use"],
             safety_flags=[],
         )
 

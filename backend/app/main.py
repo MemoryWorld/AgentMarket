@@ -4,7 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.agent import approval_router, grant_router, receipt_router
 from app.api.auth import router as auth_router, token_router, wallet_router
+from app.api.conversations import offer_router, thread_router
 from app.api.listings import listing_router, router as draft_router
 from app.api.orders import router as orders_router
 from app.api.public import router as public_router
@@ -39,6 +41,11 @@ app.include_router(token_router, prefix=settings.api_v1_prefix)
 app.include_router(draft_router, prefix=settings.api_v1_prefix)
 app.include_router(listing_router, prefix=settings.api_v1_prefix)
 app.include_router(orders_router, prefix=settings.api_v1_prefix)
+app.include_router(thread_router, prefix=settings.api_v1_prefix)
+app.include_router(offer_router, prefix=settings.api_v1_prefix)
+app.include_router(grant_router, prefix=settings.api_v1_prefix)
+app.include_router(approval_router, prefix=settings.api_v1_prefix)
+app.include_router(receipt_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/")

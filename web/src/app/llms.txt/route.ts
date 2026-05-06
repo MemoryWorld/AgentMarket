@@ -17,6 +17,23 @@ Seller-authorized write interfaces:
 - POST /api/v1/draft-listings/ai-image
 - PATCH /api/v1/draft-listings/{id}
 - POST /api/v1/draft-listings/{id}/publish
+- GET /api/v1/threads
+- POST /api/v1/threads
+- GET /api/v1/threads/{id}
+- POST /api/v1/threads/{id}/messages
+- GET /api/v1/offers
+- POST /api/v1/offers
+- POST /api/v1/offers/{id}/accept
+- POST /api/v1/offers/{id}/reject
+- POST /api/v1/offers/{id}/counter
+- GET /api/v1/approval-requests
+- POST /api/v1/approval-requests
+- POST /api/v1/approval-requests/{id}/approve
+- POST /api/v1/approval-requests/{id}/reject
+- GET /api/v1/action-receipts
+- GET /api/v1/agent-grants
+- POST /api/v1/agent-grants
+- POST /api/v1/agent-grants/{id}/revoke
 
 Buyer-authorized write interfaces:
 - POST /api/v1/orders
@@ -40,6 +57,16 @@ MCP:
 - submit_shipping_address
 - confirm_mock_payment
 - get_order
+- list_threads
+- create_message_thread
+- create_message_draft
+- create_offer
+- counter_offer
+- accept_offer
+- reject_offer
+- list_approval_requests
+- list_action_receipts
+- prepare_seller_action
 `;
 
   return new Response(body, {

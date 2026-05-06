@@ -15,13 +15,32 @@ export default async function ListingPage({
   }
 
   const seller = await getSeller(listing.seller_id);
+  const factItems = [
+    { label: "Product", value: listing.product_name ?? listing.title },
+    { label: "Brand", value: listing.brand },
+    { label: "Condition", value: listing.condition },
+    { label: "Condition score", value: listing.condition_score ? `${listing.condition_score}/10` : null },
+    { label: "Approx. size", value: listing.approx_dimensions_text },
+    { label: "Best use", value: listing.intended_use },
+  ].filter((item) => item.value);
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
-    name: listing.title,
+    name: listing.product_name ?? listing.title,
     description: listing.description,
     category: listing.category_slug,
     image: listing.images.map((image) => image.public_url),
+    brand: listing.brand
+      ? {
+          "@type": "Brand",
+          name: listing.brand,
+        }
+      : undefined,
+    additionalProperty: factItems.map((item) => ({
+      "@type": "PropertyValue",
+      name: item.label,
+      value: item.value,
+    })),
     offers: {
       "@type": "Offer",
       priceCurrency: listing.currency_code,
@@ -44,18 +63,33 @@ export default async function ListingPage({
         <div className="relative">
           <p className="eyebrow text-[var(--color-coral)]">Public Listing</p>
           <h1 className="display-title mt-2 text-5xl">{listing.title}</h1>
+          {listing.product_name && listing.product_name !== listing.title ? (
+            <p className="mt-3 text-lg font-semibold text-[rgba(18,38,63,0.72)]">{listing.product_name}</p>
+          ) : null}
           <div className="mt-5 flex flex-wrap gap-3">
             <span className="price-chip">{formatPrice(listing.asking_price_cents, listing.currency_code)}</span>
             <span className="price-chip">{listing.city_slug}</span>
             <span className="price-chip">{listing.condition ?? "Used item"}</span>
+            {listing.condition_score ? <span className="price-chip">{listing.condition_score}/10 condition</span> : null}
           </div>
           <p className="mt-5 max-w-3xl leading-8 text-[rgba(18,38,63,0.74)]">{listing.description}</p>
+
+          {factItems.length ? (
+            <div className="mt-7 grid gap-4 md:grid-cols-2">
+              {factItems.map((item) => (
+                <div key={item.label} className="soft-panel rounded-[1.4rem] p-4">
+                  <p className="eyebrow text-[rgba(18,38,63,0.54)]">{item.label}</p>
+                  <p className="mt-2 text-base font-semibold text-[var(--color-ink)]">{item.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div className="mt-7 grid gap-4 md:grid-cols-2">
             {listing.images.length ? (
               listing.images.map((image) => (
                 <figure key={image.id} className="overflow-hidden rounded-[1.4rem] border border-[rgba(18,38,63,0.08)] bg-white">
-                  <img src={image.public_url} alt={listing.title} className="h-72 w-full object-cover" />
+                  <img src={image.public_url} alt={listing.product_name ?? listing.title} className="h-72 w-full object-cover" />
                   <figcaption className="px-4 py-3 text-sm text-[rgba(18,38,63,0.72)]">
                     {image.provenance === "ai_generated" ? "AI-generated sale image" : "Original seller photo"}
                   </figcaption>

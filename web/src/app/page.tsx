@@ -43,6 +43,7 @@ export default async function Home({
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a href="/sell" className="button-primary inline-flex">Start selling with AI</a>
+              <a href="/control" className="button-secondary inline-flex">Open seller control room</a>
               <a href="/llms.txt" className="button-secondary inline-flex">Read llms.txt</a>
             </div>
 
@@ -201,7 +202,7 @@ export default async function Home({
         </section>
       </section>
 
-      <section className="mt-8 grid gap-5 md:grid-cols-3">
+      <section className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         <div className="soft-panel rounded-[1.8rem] p-6">
           <p className="eyebrow text-[var(--color-coral)]">Seller Studio</p>
           <h3 className="mt-2 text-2xl font-semibold">OTP, draft, image, publish.</h3>
@@ -209,6 +210,14 @@ export default async function Home({
             The seller workflow stays intentionally linear so the MVP can prove AI autofill and prepaid image generation without clutter.
           </p>
           <a href="/sell" className="link-chip mt-5">Open seller flow</a>
+        </div>
+        <div className="soft-panel rounded-[1.8rem] p-6">
+          <p className="eyebrow text-[var(--color-sea)]">Control Room</p>
+          <h3 className="mt-2 text-2xl font-semibold">Approve what agents prepare.</h3>
+          <p className="mt-3 text-sm leading-7 text-[rgba(18,38,63,0.72)]">
+            Seller PATs, approval queues, offers, messages, repricing, and fulfillment all run through one explicit review surface.
+          </p>
+          <a href="/control" className="link-chip mt-5">Open seller approvals</a>
         </div>
         <div className="soft-panel rounded-[1.8rem] p-6">
           <p className="eyebrow text-[var(--color-sea)]">Mock Checkout</p>

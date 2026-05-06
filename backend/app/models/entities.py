@@ -49,6 +49,50 @@ class OrderStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class MessageThreadStatus(str, Enum):
+    open = "open"
+    closed = "closed"
+
+
+class MessageEventKind(str, Enum):
+    user_message = "user_message"
+    system_note = "system_note"
+
+
+class MessageEventStatus(str, Enum):
+    pending_approval = "pending_approval"
+    sent = "sent"
+    rejected = "rejected"
+
+
+class OfferStatus(str, Enum):
+    pending_approval = "pending_approval"
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    countered = "countered"
+    expired = "expired"
+    cancelled = "cancelled"
+
+
+class ApprovalRequestStatus(str, Enum):
+    pending = "pending"
+    rejected = "rejected"
+    executed = "executed"
+    failed = "failed"
+
+
+class ActionReceiptStatus(str, Enum):
+    succeeded = "succeeded"
+    rejected = "rejected"
+    failed = "failed"
+
+
+class AgentGrantStatus(str, Enum):
+    active = "active"
+    revoked = "revoked"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -63,6 +107,7 @@ class User(Base):
     seller_profile: Mapped["SellerProfile"] = relationship(back_populates="user", uselist=False)
     wallets: Mapped[list["CreditWallet"]] = relationship(back_populates="user")
     tokens: Mapped[list["PersonalAccessToken"]] = relationship(back_populates="user")
+    agent_grants: Mapped[list["AgentGrant"]] = relationship(back_populates="user")
 
 
 class SellerProfile(Base):
@@ -125,6 +170,7 @@ class PersonalAccessToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(back_populates="tokens")
+    agent_grant: Mapped["AgentGrant | None"] = relationship(back_populates="personal_access_token", uselist=False)
 
 
 class Category(Base):
@@ -150,11 +196,15 @@ class ListingDraft(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     seller_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     title: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    product_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category_slug: Mapped[str | None] = mapped_column(String(120), ForeignKey("categories.slug"), nullable=True)
     condition: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    condition_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     color: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    approx_dimensions_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    intended_use: Mapped[str | None] = mapped_column(String(160), nullable=True)
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     asking_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     suggested_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -180,11 +230,15 @@ class Listing(Base):
     draft_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("listing_drafts.id"), nullable=True)
     slug: Mapped[str] = mapped_column(String(220), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(180))
+    product_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     description: Mapped[str] = mapped_column(Text)
     category_slug: Mapped[str] = mapped_column(String(120), ForeignKey("categories.slug"))
     condition: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    condition_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     color: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    approx_dimensions_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    intended_use: Mapped[str | None] = mapped_column(String(160), nullable=True)
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     asking_price_cents: Mapped[int] = mapped_column(Integer)
     currency_code: Mapped[str] = mapped_column(String(3), default="USD")
@@ -272,3 +326,121 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     listing: Mapped[Listing] = relationship(back_populates="orders")
+
+
+class MessageThread(Base):
+    __tablename__ = "message_threads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    listing_id: Mapped[str] = mapped_column(String(36), ForeignKey("listings.id"), index=True)
+    seller_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    buyer_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    subject: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default=MessageThreadStatus.open.value)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    messages: Mapped[list["MessageEvent"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+    offers: Mapped[list["Offer"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    requested_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    agent_grant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agent_grants.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(24), default=ApprovalRequestStatus.pending.value)
+    action_type: Mapped[str] = mapped_column(String(40))
+    resource_type: Mapped[str] = mapped_column(String(40))
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    summary: Mapped[str] = mapped_column(String(255))
+    diff_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    action_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    agent_grant: Mapped["AgentGrant | None"] = relationship(back_populates="approval_requests")
+    receipts: Mapped[list["ActionReceipt"]] = relationship(back_populates="approval_request", cascade="all, delete-orphan")
+
+
+class MessageEvent(Base):
+    __tablename__ = "message_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    thread_id: Mapped[str] = mapped_column(String(36), ForeignKey("message_threads.id"), index=True)
+    sender_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("approval_requests.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(24), default=MessageEventKind.user_message.value)
+    status: Mapped[str] = mapped_column(String(24), default=MessageEventStatus.pending_approval.value)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    thread: Mapped[MessageThread] = relationship(back_populates="messages")
+
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    thread_id: Mapped[str] = mapped_column(String(36), ForeignKey("message_threads.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(String(36), ForeignKey("listings.id"), index=True)
+    buyer_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    seller_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("approval_requests.id"), nullable=True, index=True)
+    supersedes_offer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("offers.id"), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    currency_code: Mapped[str] = mapped_column(String(3), default="USD")
+    status: Mapped[str] = mapped_column(String(24), default=OfferStatus.pending_approval.value)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    thread: Mapped[MessageThread] = relationship(back_populates="offers")
+
+
+class AgentGrant(Base):
+    __tablename__ = "agent_grants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    personal_access_token_id: Mapped[str] = mapped_column(String(36), ForeignKey("personal_access_tokens.id"), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    agent_family: Mapped[str] = mapped_column(String(40))
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    approval_mode: Mapped[str] = mapped_column(String(40), default="prepare_then_confirm")
+    status: Mapped[str] = mapped_column(String(24), default=AgentGrantStatus.active.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="agent_grants")
+    personal_access_token: Mapped[PersonalAccessToken] = relationship(back_populates="agent_grant")
+    approval_requests: Mapped[list[ApprovalRequest]] = relationship(back_populates="agent_grant")
+
+
+class ActionReceipt(Base):
+    __tablename__ = "action_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("approval_requests.id"), nullable=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    agent_grant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agent_grants.id"), nullable=True, index=True)
+    action_type: Mapped[str] = mapped_column(String(40))
+    resource_type: Mapped[str] = mapped_column(String(40))
+    resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default=ActionReceiptStatus.succeeded.value)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    approval_request: Mapped[ApprovalRequest | None] = relationship(back_populates="receipts")

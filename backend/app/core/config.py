@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     default_currency: str = "USD"
     default_country_code: str = "US"
     openai_api_key: str | None = None
-    openai_autofill_model: str = "gpt-4.1-mini"
-    openai_autofill_fallback_model: str = "gpt-5"
-    openai_image_model: str = "gpt-image-1.5"
+    openai_autofill_model: str = "gpt-5.4-mini"
+    openai_autofill_fallback_model: str = "gpt-5.5"
+    openai_image_model: str = "gpt-image-2"
     media_root: Path = Field(default=MEDIA_DIR)
     upload_root: Path = Field(default=UPLOAD_DIR)
     generated_root: Path = Field(default=GENERATED_DIR)
