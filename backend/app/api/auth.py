@@ -1,15 +1,28 @@
-from datetime import UTC
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthActor, get_current_actor
+from app.api.deps import AuthActor, check_scopes, get_current_actor, require_human
 from app.core.config import get_settings
-from app.core.security import create_access_token, create_personal_access_token, generate_otp, sha256_text, utcnow
+from app.core.security import (
+    create_access_token,
+    create_personal_access_token,
+    generate_otp,
+    sha256_text,
+    utcnow,
+)
 from app.db.session import get_session
-from app.models import AgentGrant, CreditWallet, EmailOTP, PersonalAccessToken, SellerProfile, UsageLedger, User
+from app.models import (
+    AgentGrant,
+    CreditWallet,
+    EmailOTP,
+    PersonalAccessToken,
+    SellerProfile,
+    UsageLedger,
+    User,
+)
 from app.models.entities import AgentGrantStatus
 from app.schemas.domain import (
     AuthTokenResponse,
@@ -25,7 +38,6 @@ from app.schemas.domain import (
     WalletResponse,
 )
 from app.services.bootstrap import slugify
-
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 wallet_router = APIRouter(prefix="/wallet", tags=["wallet"])
@@ -125,7 +137,7 @@ async def top_up_wallet(
 
 @token_router.get("", response_model=list[PATResponse])
 async def list_tokens(
-    actor: AuthActor = Depends(get_current_actor),
+    actor: AuthActor = Depends(require_human()),
     session: AsyncSession = Depends(get_session),
 ) -> list[PATResponse]:
     tokens = (await session.scalars(select(PersonalAccessToken).where(PersonalAccessToken.user_id == actor.user.id))).all()
@@ -135,9 +147,10 @@ async def list_tokens(
 @token_router.post("", response_model=PATCreateResponse)
 async def create_pat(
     payload: PATCreateRequest,
-    actor: AuthActor = Depends(get_current_actor),
+    actor: AuthActor = Depends(require_human()),
     session: AsyncSession = Depends(get_session),
 ) -> PATCreateResponse:
+    check_scopes(actor, *payload.scopes)
     token, prefix, token_hash = create_personal_access_token()
     record = PersonalAccessToken(
         user_id=actor.user.id,
@@ -156,7 +169,7 @@ async def create_pat(
 @token_router.post("/{token_id}/revoke", response_model=PATResponse)
 async def revoke_pat(
     token_id: str,
-    actor: AuthActor = Depends(get_current_actor),
+    actor: AuthActor = Depends(require_human()),
     session: AsyncSession = Depends(get_session),
 ) -> PATResponse:
     record = await session.scalar(

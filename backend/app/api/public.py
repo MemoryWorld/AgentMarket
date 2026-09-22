@@ -1,12 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
 from app.models import Category, City, Listing, SellerProfile
-from app.schemas.domain import CategoryResponse, CityResponse, ListingResponse, ListingSummaryResponse, SearchResponse, SellerProfileResponse
-
+from app.schemas.domain import (
+    CategoryResponse,
+    CityResponse,
+    ListingResponse,
+    ListingSummaryResponse,
+    SearchResponse,
+    SellerProfileResponse,
+)
 
 router = APIRouter(tags=["public"])
 
@@ -120,7 +126,7 @@ async def get_listing(listing_id_or_slug: str, session: AsyncSession = Depends(g
         .where(or_(Listing.id == listing_id_or_slug, Listing.slug == listing_id_or_slug))
         .options(selectinload(Listing.images))
     )
-    if not listing or listing.visibility != "public":
+    if not listing or listing.visibility != "public" or listing.status != "published":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Listing not found.")
     return ListingResponse.model_validate(listing)
 

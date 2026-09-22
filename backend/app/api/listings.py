@@ -5,11 +5,26 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import AuthActor, get_current_actor, require_scopes
+from app.api.deps import AuthActor, get_current_actor, require_human, require_scopes
 from app.core.config import get_settings
 from app.db.session import get_session
-from app.models import AIJob, Category, CreditWallet, Favorite, Listing, ListingDraft, ListingImage, Report, UsageLedger
-from app.models.entities import AIJobStatus, AIJobType, ImageProvenance, ListingWorkflowStatus
+from app.models import (
+    AIJob,
+    Category,
+    CreditWallet,
+    Favorite,
+    Listing,
+    ListingDraft,
+    ListingImage,
+    Report,
+    UsageLedger,
+)
+from app.models.entities import (
+    AIJobStatus,
+    AIJobType,
+    ImageProvenance,
+    ListingWorkflowStatus,
+)
 from app.schemas.domain import (
     DraftCreateRequest,
     DraftImageGenerateRequest,
@@ -22,9 +37,11 @@ from app.schemas.domain import (
 )
 from app.services.ai import AIService
 from app.services.bootstrap import slugify
-from app.services.marketplace_ops import publish_draft_listing, validate_publishable_draft
+from app.services.marketplace_ops import (
+    publish_draft_listing,
+    validate_publishable_draft,
+)
 from app.services.storage import StorageService
-
 
 router = APIRouter(prefix="/draft-listings", tags=["draft-listings"])
 listing_router = APIRouter(prefix="/listings", tags=["listings-actions"])
@@ -267,7 +284,7 @@ async def generate_draft_image(
 @router.post("/{draft_id}/publish", response_model=ListingResponse)
 async def publish_draft(
     draft_id: str,
-    actor: AuthActor = Depends(require_scopes("listings:write")),
+    actor: AuthActor = Depends(require_human("listings:write")),
     session: AsyncSession = Depends(get_session),
 ) -> ListingResponse:
     draft = await _get_draft_for_seller(session, actor.user.id, draft_id)

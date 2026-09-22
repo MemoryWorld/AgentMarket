@@ -1,11 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.api.deps import AuthActor, get_current_actor, require_scopes
+from app.api.deps import AuthActor, check_scopes, require_human, require_scopes
 from app.core.security import create_personal_access_token, utcnow
 from app.db.session import get_session
-from app.models import ActionReceipt, AgentGrant, ApprovalRequest, Listing, ListingDraft, Order, PersonalAccessToken
+from app.models import (
+    ActionReceipt,
+    AgentGrant,
+    ApprovalRequest,
+    Listing,
+    ListingDraft,
+    Order,
+    PersonalAccessToken,
+)
 from app.models.entities import AgentGrantStatus
 from app.schemas.domain import (
     ActionReceiptResponse,
@@ -16,8 +25,13 @@ from app.schemas.domain import (
     ApprovalDecisionResponse,
     ApprovalRequestResponse,
 )
-from app.services.approval_ops import create_approval_request, execute_approval_request, reject_approval_request
-
+from app.services.approval_ops import (
+    begin_preparation,
+    create_approval_request,
+    execute_approval_request,
+    reject_approval_request,
+)
+from app.services.marketplace_ops import draft_snapshot
 
 DEFAULT_AGENT_SCOPES = [
     "listings:write",
@@ -54,7 +68,7 @@ async def _load_listing_for_seller(session: AsyncSession, seller_id: str, listin
 
 
 async def _load_draft_for_seller(session: AsyncSession, seller_id: str, draft_id: str) -> ListingDraft:
-    draft = await session.scalar(select(ListingDraft).where(ListingDraft.id == draft_id, ListingDraft.seller_id == seller_id))
+    draft = await session.scalar(select(ListingDraft).where(ListingDraft.id == draft_id, ListingDraft.seller_id == seller_id).options(selectinload(ListingDraft.images)))
     if not draft:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found.")
     return draft
@@ -79,10 +93,13 @@ async def list_agent_grants(
 @grant_router.post("", response_model=AgentGrantCreateResponse)
 async def create_agent_grant(
     payload: AgentGrantCreateRequest,
-    actor: AuthActor = Depends(require_scopes("grants:write")),
+    actor: AuthActor = Depends(require_human("grants:write")),
     session: AsyncSession = Depends(get_session),
 ) -> AgentGrantCreateResponse:
     scopes = payload.scopes or DEFAULT_AGENT_SCOPES
+    check_scopes(actor, *scopes)
+    if payload.approval_mode != "prepare_then_confirm":
+        raise HTTPException(status_code=400, detail="Only prepare_then_confirm approval mode is supported.")
     token, prefix, token_hash = create_personal_access_token()
     pat = PersonalAccessToken(
         user_id=actor.user.id,
@@ -111,7 +128,7 @@ async def create_agent_grant(
 @grant_router.post("/{grant_id}/revoke", response_model=AgentGrantResponse)
 async def revoke_agent_grant(
     grant_id: str,
-    actor: AuthActor = Depends(require_scopes("grants:write")),
+    actor: AuthActor = Depends(require_human("grants:write")),
     session: AsyncSession = Depends(get_session),
 ) -> AgentGrantResponse:
     grant = await session.scalar(select(AgentGrant).where(AgentGrant.id == grant_id, AgentGrant.user_id == actor.user.id))
@@ -146,6 +163,11 @@ async def prepare_approval_request(
     actor: AuthActor = Depends(require_scopes("approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> ApprovalRequestResponse:
+    required = "listings:write" if payload.action_type in {"publish_listing", "reprice_listing"} else "orders:write"
+    check_scopes(actor, "approvals:write", required)
+    existing, fingerprint = await begin_preparation(session, actor, payload.action_type, payload)
+    if existing:
+        return ApprovalRequestResponse.model_validate(existing)
     action_payload: dict[str, object]
     diff_payload: dict[str, object]
     resource_type: str
@@ -164,7 +186,7 @@ async def prepare_approval_request(
             "product_name": draft.product_name,
             "asking_price_cents": draft.asking_price_cents,
         }
-        action_payload = {"draft_id": draft.id}
+        action_payload = {"draft_id": draft.id, "draft_snapshot": draft_snapshot(draft)}
     elif payload.action_type == "reprice_listing":
         if not payload.listing_id or payload.new_price_cents is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="listing_id and new_price_cents are required.")
@@ -217,6 +239,7 @@ async def prepare_approval_request(
         diff_payload=diff_payload,
         action_payload=action_payload,
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
     await session.commit()
     await session.refresh(approval)
@@ -226,16 +249,18 @@ async def prepare_approval_request(
 @approval_router.post("/{approval_id}/approve", response_model=ApprovalDecisionResponse)
 async def approve_request(
     approval_id: str,
-    actor: AuthActor = Depends(require_scopes("approvals:write")),
+    actor: AuthActor = Depends(require_human("approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> ApprovalDecisionResponse:
     approval = await _get_approval_for_owner(session, actor.user.id, approval_id)
     try:
         receipt = await execute_approval_request(session, approval, actor.user.id)
         await session.commit()
-    except Exception as exc:
-        await session.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception:
+        await session.rollback()
+        raise
+    if receipt.status == "failed":
+        raise HTTPException(status_code=400, detail=receipt.error_message)
     await session.refresh(approval)
     return ApprovalDecisionResponse(
         approval_request=ApprovalRequestResponse.model_validate(approval),
@@ -246,16 +271,16 @@ async def approve_request(
 @approval_router.post("/{approval_id}/reject", response_model=ApprovalDecisionResponse)
 async def reject_request(
     approval_id: str,
-    actor: AuthActor = Depends(require_scopes("approvals:write")),
+    actor: AuthActor = Depends(require_human("approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> ApprovalDecisionResponse:
     approval = await _get_approval_for_owner(session, actor.user.id, approval_id)
     try:
         receipt = await reject_approval_request(session, approval, actor.user.id)
         await session.commit()
-    except Exception as exc:
-        await session.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(approval)
     return ApprovalDecisionResponse(
         approval_request=ApprovalRequestResponse.model_validate(approval),
