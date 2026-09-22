@@ -6,32 +6,35 @@ from fastmcp import FastMCP
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.api import agent as agent_api
+from app.api import conversations as conversation_api
+from app.api import orders as order_api
+from app.api.deps import AuthActor, check_human, check_scopes, resolve_actor
 from app.api.listings import _normalize_category_slug
 from app.api.public import build_listing_summary
 from app.core.config import get_settings
-from app.core.security import decode_access_token, sha256_text
 from app.db.session import SessionLocal
 from app.models import (
     ActionReceipt,
-    AgentGrant,
     ApprovalRequest,
     Category,
     CreditWallet,
     Listing,
     ListingDraft,
     ListingImage,
-    MessageEvent,
     MessageThread,
-    Offer,
     Order,
-    PersonalAccessToken,
     UsageLedger,
     User,
 )
-from app.models.entities import ImageProvenance, MessageEventKind, MessageEventStatus, OfferStatus, OrderStatus
+from app.models.entities import (
+    ImageProvenance,
+    OrderStatus,
+)
 from app.schemas.domain import (
     ApprovalActionPrepareRequest,
     DraftImageGenerateRequest,
+    MessageEventCreateRequest,
     MessageThreadCreateRequest,
     OfferCounterRequest,
     OfferCreateRequest,
@@ -39,39 +42,24 @@ from app.schemas.domain import (
     OrderAddressRequest,
     SearchResponse,
 )
-from app.services.approval_ops import create_approval_request
 from app.services.ai import AIService
 from app.services.marketplace_ops import publish_draft_listing
-from app.services.bootstrap import slugify
 from app.services.storage import StorageService
-
 
 mcp = FastMCP("Agent Marketplace")
 
 
-async def _resolve_actor_context(token: str) -> tuple[User, AgentGrant | None]:
+async def _resolve_auth(token: str, *scopes: str, human: bool = False) -> AuthActor:
     async with SessionLocal() as session:
-        if token.startswith("pat_"):
-            pat = await session.scalar(select(PersonalAccessToken).where(PersonalAccessToken.token_hash == sha256_text(token)))
-            if not pat or pat.revoked:
-                raise ValueError("Invalid personal access token.")
-            user = await session.get(User, pat.user_id)
-            if not user:
-                raise ValueError("Token user does not exist.")
-            grant = await session.scalar(select(AgentGrant).where(AgentGrant.personal_access_token_id == pat.id))
-            if grant and grant.status == "revoked":
-                raise ValueError("Agent grant has been revoked.")
-            return user, grant
-        payload = decode_access_token(token)
-        user = await session.get(User, payload["sub"])
-        if not user:
-            raise ValueError("User not found.")
-        return user, None
+        actor = await resolve_actor(token, session)
+        check_scopes(actor, *scopes)
+        if human:
+            check_human(actor)
+        return actor
 
 
-async def _resolve_actor(token: str) -> User:
-    user, _ = await _resolve_actor_context(token)
-    return user
+async def _resolve_actor(token: str, *scopes: str, human: bool = False) -> User:
+    return (await _resolve_auth(token, *scopes, human=human)).user
 
 
 @mcp.tool
@@ -101,7 +89,7 @@ async def get_listing(listing_id_or_slug: str) -> dict:
         listing = await session.scalar(
             select(Listing).where((Listing.id == listing_id_or_slug) | (Listing.slug == listing_id_or_slug)).options(selectinload(Listing.images))
         )
-        if not listing:
+        if not listing or listing.visibility != "public" or listing.status != "published":
             raise ValueError("Listing not found.")
         return {
             "id": listing.id,
@@ -130,7 +118,7 @@ async def get_category_tree() -> list[dict]:
 
 @mcp.tool
 async def create_listing_draft(access_token: str, title: str, description: str, city_slug: str, asking_price_cents: int) -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "listings:write")
     async with SessionLocal() as session:
         draft = ListingDraft(
             seller_id=user.id,
@@ -148,7 +136,7 @@ async def create_listing_draft(access_token: str, title: str, description: str, 
 
 @mcp.tool
 async def autofill_listing_from_photos(access_token: str, photo_urls: list[str], currency_code: str = "USD") -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "listings:write", "ai:generate")
     storage = StorageService()
     ai = AIService()
     async with httpx.AsyncClient(timeout=30) as client:
@@ -214,7 +202,7 @@ async def autofill_listing_from_photos(access_token: str, photo_urls: list[str],
 
 @mcp.tool
 async def generate_listing_image(access_token: str, draft_id: str, style_preset: str = "clean studio") -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "listings:write", "ai:generate")
     async with SessionLocal() as session:
         draft = await session.scalar(select(ListingDraft).where(ListingDraft.id == draft_id, ListingDraft.seller_id == user.id))
         if not draft:
@@ -259,7 +247,7 @@ async def generate_listing_image(access_token: str, draft_id: str, style_preset:
 
 @mcp.tool
 async def publish_listing_draft(access_token: str, draft_id: str) -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "listings:write", human=True)
     async with SessionLocal() as session:
         draft = await session.scalar(
             select(ListingDraft)
@@ -275,7 +263,7 @@ async def publish_listing_draft(access_token: str, draft_id: str) -> dict:
 
 @mcp.tool
 async def create_order(access_token: str, listing_id_or_slug: str) -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "orders:write")
     async with SessionLocal() as session:
         listing = await session.scalar(select(Listing).where((Listing.id == listing_id_or_slug) | (Listing.slug == listing_id_or_slug)))
         if not listing:
@@ -293,33 +281,24 @@ async def create_order(access_token: str, listing_id_or_slug: str) -> dict:
 
 @mcp.tool
 async def submit_shipping_address(access_token: str, order_id: str, address: dict) -> dict:
-    user = await _resolve_actor(access_token)
-    payload = OrderAddressRequest.model_validate({"address": address})
+    actor = await _resolve_auth(access_token, "orders:write")
     async with SessionLocal() as session:
-        order = await session.get(Order, order_id)
-        if not order or order.buyer_id != user.id:
-            raise ValueError("Order not found.")
-        order.address_payload = payload.address.model_dump()
-        order.status = OrderStatus.payment_pending.value
-        await session.commit()
-        return {"order_id": order.id, "status": order.status}
+        payload = OrderAddressRequest.model_validate({"address": address})
+        result = await order_api.submit_address(order_id, payload, actor, session)
+        return {"order_id": order_id, "status": result.status}
 
 
 @mcp.tool
 async def confirm_mock_payment(access_token: str, order_id: str) -> dict:
-    user = await _resolve_actor(access_token)
+    actor = await _resolve_auth(access_token, "orders:write")
     async with SessionLocal() as session:
-        order = await session.get(Order, order_id)
-        if not order or order.buyer_id != user.id:
-            raise ValueError("Order not found.")
-        order.status = OrderStatus.paid.value
-        await session.commit()
-        return {"order_id": order.id, "status": order.status}
+        result = await order_api.mock_pay(order_id, actor, session)
+        return {"order_id": order_id, "status": result.status}
 
 
 @mcp.tool
 async def get_order(access_token: str, order_id: str) -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "orders:write")
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
         if not order or user.id not in {order.buyer_id, order.seller_id}:
@@ -336,7 +315,7 @@ async def get_order(access_token: str, order_id: str) -> dict:
 
 @mcp.tool
 async def list_threads(access_token: str) -> list[dict]:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "messages:read")
     async with SessionLocal() as session:
         threads = (
             await session.scalars(
@@ -361,7 +340,7 @@ async def list_threads(access_token: str) -> list[dict]:
 
 @mcp.tool
 async def create_message_thread(access_token: str, listing_id: str, participant_user_id: str | None = None, subject: str | None = None) -> dict:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "messages:write")
     async with SessionLocal() as session:
         listing = await session.get(Listing, listing_id)
         if not listing:
@@ -398,189 +377,52 @@ async def create_message_thread(access_token: str, listing_id: str, participant_
 
 @mcp.tool
 async def create_message_draft(access_token: str, thread_id: str, body: str, idempotency_key: str | None = None) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
+    actor = await _resolve_auth(access_token, "messages:write", "approvals:write")
+    payload = MessageEventCreateRequest(body=body, idempotency_key=idempotency_key)
     async with SessionLocal() as session:
-        thread = await session.scalar(
-            select(MessageThread).where(
-                MessageThread.id == thread_id,
-                ((MessageThread.buyer_id == user.id) | (MessageThread.seller_id == user.id)),
-            )
-        )
-        if not thread:
-            raise ValueError("Thread not found.")
-        message = MessageEvent(
-            thread_id=thread.id,
-            sender_id=user.id,
-            kind=MessageEventKind.user_message.value,
-            status=MessageEventStatus.pending_approval.value,
-            body=body,
-        )
-        session.add(message)
-        await session.flush()
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type="send_message",
-            resource_type="message",
-            resource_id=message.id,
-            summary=f"Send message in thread {thread.id[:8]}.",
-            diff_payload={"body_preview": body[:180]},
-            action_payload={"thread_id": thread.id, "message_id": message.id},
-            idempotency_key=idempotency_key,
-        )
-        message.approval_request_id = approval.id
-        await session.commit()
-        return {"message_id": message.id, "approval_request_id": approval.id, "status": message.status}
+        message = await conversation_api.create_message_draft(thread_id, payload, actor, session)
+        return {"message_id": message.id, "approval_request_id": message.approval_request_id, "status": message.status}
 
 
 @mcp.tool
 async def create_offer(access_token: str, thread_id: str, amount_cents: int, note: str | None = None, idempotency_key: str | None = None) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
+    actor = await _resolve_auth(access_token, "offers:write", "approvals:write")
     payload = OfferCreateRequest(thread_id=thread_id, amount_cents=amount_cents, note=note, idempotency_key=idempotency_key)
     async with SessionLocal() as session:
-        thread = await session.scalar(
-            select(MessageThread).where(
-                MessageThread.id == payload.thread_id,
-                ((MessageThread.buyer_id == user.id) | (MessageThread.seller_id == user.id)),
-            )
-        )
-        if not thread:
-            raise ValueError("Thread not found.")
-        listing = await session.get(Listing, thread.listing_id)
-        if not listing:
-            raise ValueError("Listing not found.")
-        offer = Offer(
-            thread_id=thread.id,
-            listing_id=thread.listing_id,
-            buyer_id=thread.buyer_id,
-            seller_id=thread.seller_id,
-            created_by_user_id=user.id,
-            amount_cents=payload.amount_cents,
-            currency_code=listing.currency_code,
-            status=OfferStatus.pending_approval.value,
-            note=payload.note,
-        )
-        session.add(offer)
-        await session.flush()
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type="create_offer",
-            resource_type="offer",
-            resource_id=offer.id,
-            summary=f"Create offer for {payload.amount_cents} cents on listing '{listing.title}'.",
-            diff_payload={"amount_cents": payload.amount_cents, "note": payload.note},
-            action_payload={"offer_id": offer.id},
-            idempotency_key=payload.idempotency_key,
-        )
-        offer.approval_request_id = approval.id
-        await session.commit()
-        return {"offer_id": offer.id, "approval_request_id": approval.id, "status": offer.status}
+        offer = await conversation_api.create_offer(payload, actor, session)
+        return {"offer_id": offer.id, "approval_request_id": offer.approval_request_id, "status": offer.status}
 
 
 @mcp.tool
 async def counter_offer(access_token: str, offer_id: str, amount_cents: int, note: str | None = None, idempotency_key: str | None = None) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
+    actor = await _resolve_auth(access_token, "offers:write", "approvals:write")
     payload = OfferCounterRequest(amount_cents=amount_cents, note=note, idempotency_key=idempotency_key)
     async with SessionLocal() as session:
-        target_offer = await session.scalar(
-            select(Offer).where(Offer.id == offer_id, ((Offer.buyer_id == user.id) | (Offer.seller_id == user.id)))
-        )
-        if not target_offer:
-            raise ValueError("Offer not found.")
-        counter = Offer(
-            thread_id=target_offer.thread_id,
-            listing_id=target_offer.listing_id,
-            buyer_id=target_offer.buyer_id,
-            seller_id=target_offer.seller_id,
-            created_by_user_id=user.id,
-            supersedes_offer_id=target_offer.id,
-            amount_cents=payload.amount_cents,
-            currency_code=target_offer.currency_code,
-            status=OfferStatus.pending_approval.value,
-            note=payload.note,
-        )
-        session.add(counter)
-        await session.flush()
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type="counter_offer",
-            resource_type="offer",
-            resource_id=counter.id,
-            summary=f"Counter offer {target_offer.id[:8]} with {payload.amount_cents} cents.",
-            diff_payload={"from_amount_cents": target_offer.amount_cents, "to_amount_cents": payload.amount_cents},
-            action_payload={"offer_id": counter.id, "target_offer_id": target_offer.id},
-            idempotency_key=payload.idempotency_key,
-        )
-        counter.approval_request_id = approval.id
-        await session.commit()
-        return {"offer_id": counter.id, "approval_request_id": approval.id, "status": counter.status}
+        offer = await conversation_api.counter_offer(offer_id, payload, actor, session)
+        return {"offer_id": offer.id, "approval_request_id": offer.approval_request_id, "status": offer.status}
 
 
 @mcp.tool
 async def accept_offer(access_token: str, offer_id: str, idempotency_key: str | None = None) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
-    _ = OfferDecisionRequest(idempotency_key=idempotency_key)
+    actor = await _resolve_auth(access_token, "offers:write", "approvals:write")
+    payload = OfferDecisionRequest(idempotency_key=idempotency_key)
     async with SessionLocal() as session:
-        offer = await session.scalar(
-            select(Offer).where(Offer.id == offer_id, ((Offer.buyer_id == user.id) | (Offer.seller_id == user.id)))
-        )
-        if not offer:
-            raise ValueError("Offer not found.")
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type="accept_offer",
-            resource_type="offer",
-            resource_id=offer.id,
-            summary=f"Accept offer {offer.id[:8]} for {offer.amount_cents} cents.",
-            diff_payload={"from_status": offer.status, "to_status": "accepted"},
-            action_payload={"offer_id": offer.id},
-            idempotency_key=idempotency_key,
-        )
-        await session.commit()
-        return {"offer_id": offer.id, "approval_request_id": approval.id, "status": offer.status}
+        offer = await conversation_api.accept_offer(offer_id, payload, actor, session)
+        return {"offer_id": offer.id, "approval_request_id": session.info["prepared_approval_id"], "status": offer.status}
 
 
 @mcp.tool
 async def reject_offer(access_token: str, offer_id: str, idempotency_key: str | None = None) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
-    _ = OfferDecisionRequest(idempotency_key=idempotency_key)
+    actor = await _resolve_auth(access_token, "offers:write", "approvals:write")
+    payload = OfferDecisionRequest(idempotency_key=idempotency_key)
     async with SessionLocal() as session:
-        offer = await session.scalar(
-            select(Offer).where(Offer.id == offer_id, ((Offer.buyer_id == user.id) | (Offer.seller_id == user.id)))
-        )
-        if not offer:
-            raise ValueError("Offer not found.")
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type="reject_offer",
-            resource_type="offer",
-            resource_id=offer.id,
-            summary=f"Reject offer {offer.id[:8]}.",
-            diff_payload={"from_status": offer.status, "to_status": "rejected"},
-            action_payload={"offer_id": offer.id},
-            idempotency_key=idempotency_key,
-        )
-        await session.commit()
-        return {"offer_id": offer.id, "approval_request_id": approval.id, "status": offer.status}
+        offer = await conversation_api.reject_offer(offer_id, payload, actor, session)
+        return {"offer_id": offer.id, "approval_request_id": session.info["prepared_approval_id"], "status": offer.status}
 
 
 @mcp.tool
 async def list_approval_requests(access_token: str) -> list[dict]:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "approvals:read")
     async with SessionLocal() as session:
         approvals = (
             await session.scalars(
@@ -603,7 +445,7 @@ async def list_approval_requests(access_token: str) -> list[dict]:
 
 @mcp.tool
 async def list_action_receipts(access_token: str) -> list[dict]:
-    user = await _resolve_actor(access_token)
+    user = await _resolve_actor(access_token, "receipts:read")
     async with SessionLocal() as session:
         receipts = (
             await session.scalars(
@@ -637,7 +479,7 @@ async def prepare_seller_action(
     summary: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
-    user, grant = await _resolve_actor_context(access_token)
+    actor = await _resolve_auth(access_token, "approvals:write")
     payload = ApprovalActionPrepareRequest(
         action_type=action_type,
         draft_id=draft_id,
@@ -651,81 +493,5 @@ async def prepare_seller_action(
         idempotency_key=idempotency_key,
     )
     async with SessionLocal() as session:
-        diff_payload: dict[str, object]
-        resource_type: str
-        resource_id: str | None
-        action_payload: dict[str, object]
-        approval_summary: str
-
-        if payload.action_type == "publish_listing":
-            if not payload.draft_id:
-                raise ValueError("draft_id is required.")
-            draft = await session.scalar(select(ListingDraft).where(ListingDraft.id == payload.draft_id, ListingDraft.seller_id == user.id))
-            if not draft:
-                raise ValueError("Draft not found.")
-            resource_type = "draft"
-            resource_id = draft.id
-            approval_summary = payload.summary or f"Publish listing draft '{draft.title or draft.product_name or draft.id}'."
-            diff_payload = {"title": draft.title, "product_name": draft.product_name, "asking_price_cents": draft.asking_price_cents}
-            action_payload = {"draft_id": draft.id}
-        elif payload.action_type == "reprice_listing":
-            if not payload.listing_id or payload.new_price_cents is None:
-                raise ValueError("listing_id and new_price_cents are required.")
-            listing = await session.scalar(select(Listing).where(Listing.id == payload.listing_id, Listing.seller_id == user.id))
-            if not listing:
-                raise ValueError("Listing not found.")
-            resource_type = "listing"
-            resource_id = listing.id
-            approval_summary = payload.summary or f"Reprice listing '{listing.title}' to {payload.new_price_cents} cents."
-            diff_payload = {"from_price_cents": listing.asking_price_cents, "to_price_cents": payload.new_price_cents}
-            action_payload = {"listing_id": listing.id, "new_price_cents": payload.new_price_cents}
-        elif payload.action_type == "cancel_order":
-            if not payload.order_id:
-                raise ValueError("order_id is required.")
-            order = await session.scalar(select(Order).where(Order.id == payload.order_id, Order.seller_id == user.id))
-            if not order:
-                raise ValueError("Order not found.")
-            resource_type = "order"
-            resource_id = order.id
-            approval_summary = payload.summary or f"Cancel order {order.id}."
-            diff_payload = {"from_status": order.status, "to_status": "cancelled"}
-            action_payload = {"order_id": order.id}
-        elif payload.action_type == "update_fulfillment":
-            if not payload.order_id or not payload.status:
-                raise ValueError("order_id and status are required.")
-            order = await session.scalar(select(Order).where(Order.id == payload.order_id, Order.seller_id == user.id))
-            if not order:
-                raise ValueError("Order not found.")
-            resource_type = "order"
-            resource_id = order.id
-            approval_summary = payload.summary or f"Update order {order.id} to fulfillment status '{payload.status}'."
-            diff_payload = {
-                "from_status": order.status,
-                "to_status": payload.status,
-                "carrier": payload.carrier,
-                "tracking_number": payload.tracking_number,
-            }
-            action_payload = {
-                "order_id": order.id,
-                "status": payload.status,
-                "carrier": payload.carrier,
-                "tracking_number": payload.tracking_number,
-            }
-        else:
-            raise ValueError(f"Unsupported approval action: {payload.action_type}")
-
-        approval = await create_approval_request(
-            session,
-            owner_user_id=user.id,
-            requested_by_user_id=user.id,
-            agent_grant_id=grant.id if grant else None,
-            action_type=payload.action_type,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            summary=approval_summary,
-            diff_payload=diff_payload,
-            action_payload=action_payload,
-            idempotency_key=payload.idempotency_key,
-        )
-        await session.commit()
+        approval = await agent_api.prepare_approval_request(payload, actor, session)
         return {"approval_request_id": approval.id, "status": approval.status, "summary": approval.summary}

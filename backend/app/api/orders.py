@@ -2,12 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AuthActor, get_current_actor, require_scopes
+from app.api.deps import AuthActor, require_human, require_scopes
 from app.db.session import get_session
 from app.models import Listing, Order
 from app.models.entities import OrderStatus
-from app.schemas.domain import OrderAddressRequest, OrderCreateRequest, OrderPaymentResponse, OrderResponse, OrderStatusUpdateRequest
-
+from app.schemas.domain import (
+    OrderAddressRequest,
+    OrderCreateRequest,
+    OrderPaymentResponse,
+    OrderResponse,
+    OrderStatusUpdateRequest,
+)
+from app.services.marketplace_ops import validate_fulfillment_transition
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -79,6 +85,8 @@ async def submit_address(
     order = await _get_order_for_actor(session, actor, order_id)
     if order.buyer_id != actor.user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the buyer can submit shipping address.")
+    if order.status not in {"address_pending", "payment_pending"}:
+        raise HTTPException(status_code=409, detail="Order no longer accepts checkout changes.")
     order.address_payload = payload.address.model_dump()
     order.status = OrderStatus.payment_pending.value
     await session.commit()
@@ -95,6 +103,8 @@ async def mock_pay(
     order = await _get_order_for_actor(session, actor, order_id)
     if order.buyer_id != actor.user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the buyer can complete mock checkout.")
+    if order.status not in {"payment_pending", "paid"}:
+        raise HTTPException(status_code=409, detail="Order is not awaiting payment.")
     if not order.address_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Shipping address must be submitted first.")
     order.status = OrderStatus.paid.value
@@ -105,7 +115,7 @@ async def mock_pay(
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: str,
-    actor: AuthActor = Depends(get_current_actor),
+    actor: AuthActor = Depends(require_scopes("orders:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OrderResponse:
     order = await _get_order_for_actor(session, actor, order_id)
@@ -115,7 +125,7 @@ async def get_order(
 @router.post("/{order_id}/cancel", response_model=OrderResponse)
 async def cancel_order(
     order_id: str,
-    actor: AuthActor = Depends(require_scopes("orders:write")),
+    actor: AuthActor = Depends(require_human("orders:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OrderResponse:
     order = await _get_order_for_actor(session, actor, order_id)
@@ -131,12 +141,16 @@ async def cancel_order(
 async def update_order_status(
     order_id: str,
     payload: OrderStatusUpdateRequest,
-    actor: AuthActor = Depends(require_scopes("orders:write")),
+    actor: AuthActor = Depends(require_human("orders:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OrderResponse:
     order = await _get_order_for_actor(session, actor, order_id)
     if order.seller_id != actor.user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the seller can update fulfillment status.")
+    try:
+        validate_fulfillment_transition(order.status, payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     order.status = payload.status
     order.carrier = payload.carrier
     order.tracking_number = payload.tracking_number

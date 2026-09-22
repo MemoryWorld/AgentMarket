@@ -6,7 +6,12 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import AuthActor, require_scopes
 from app.db.session import get_session
 from app.models import Listing, MessageEvent, MessageThread, Offer
-from app.models.entities import MessageEventKind, MessageEventStatus, MessageThreadStatus, OfferStatus
+from app.models.entities import (
+    MessageEventKind,
+    MessageEventStatus,
+    MessageThreadStatus,
+    OfferStatus,
+)
 from app.schemas.domain import (
     MessageEventCreateRequest,
     MessageEventResponse,
@@ -18,8 +23,7 @@ from app.schemas.domain import (
     OfferResponse,
     ThreadDetailResponse,
 )
-from app.services.approval_ops import create_approval_request, find_existing_approval
-
+from app.services.approval_ops import begin_preparation, create_approval_request
 
 thread_router = APIRouter(prefix="/threads", tags=["threads"])
 offer_router = APIRouter(prefix="/offers", tags=["offers"])
@@ -47,14 +51,14 @@ async def _get_offer_for_actor(session: AsyncSession, actor: AuthActor, offer_id
             or_(Offer.buyer_id == actor.user.id, Offer.seller_id == actor.user.id),
         )
     )
-    if not offer:
+    if not offer or (offer.status == "pending_approval" and offer.created_by_user_id != actor.user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offer not found.")
     return offer
 
 
-def _thread_response(thread: MessageThread) -> ThreadDetailResponse:
-    messages = sorted(thread.messages, key=lambda item: item.created_at)
-    offers = sorted(thread.offers, key=lambda item: item.created_at)
+def _thread_response(thread: MessageThread, actor: AuthActor) -> ThreadDetailResponse:
+    messages = sorted((item for item in thread.messages if item.sender_id == actor.user.id or item.status == "sent"), key=lambda item: item.created_at)
+    offers = sorted((item for item in thread.offers if "offers:read" in actor.scopes and (item.created_by_user_id == actor.user.id or item.status != "pending_approval")), key=lambda item: item.created_at)
     return ThreadDetailResponse(
         id=thread.id,
         listing_id=thread.listing_id,
@@ -139,7 +143,7 @@ async def get_thread(
     session: AsyncSession = Depends(get_session),
 ) -> ThreadDetailResponse:
     thread = await _get_thread_for_actor(session, actor, thread_id)
-    return _thread_response(thread)
+    return _thread_response(thread, actor)
 
 
 @thread_router.post("/{thread_id}/messages", response_model=MessageEventResponse)
@@ -149,8 +153,8 @@ async def create_message_draft(
     actor: AuthActor = Depends(require_scopes("messages:write", "approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> MessageEventResponse:
+    existing, fingerprint = await begin_preparation(session, actor, "send_message", payload, thread_id=thread_id)
     thread = await _get_thread_for_actor(session, actor, thread_id)
-    existing = await find_existing_approval(session, actor.user.id, payload.idempotency_key)
     if existing and existing.resource_type == "message" and existing.resource_id:
         message = await session.get(MessageEvent, existing.resource_id)
         if message:
@@ -178,6 +182,7 @@ async def create_message_draft(
         diff_payload={"body_preview": payload.body[:180]},
         action_payload={"thread_id": thread.id, "message_id": message.id},
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
     message.approval_request_id = approval.id
     await session.commit()
@@ -202,7 +207,7 @@ async def list_offers(
     if status_filter:
         stmt = stmt.where(Offer.status == status_filter)
     offers = (await session.scalars(stmt.limit(100))).all()
-    return [OfferResponse.model_validate(offer) for offer in offers]
+    return [OfferResponse.model_validate(offer) for offer in offers if offer.created_by_user_id == actor.user.id or offer.status != "pending_approval"]
 
 
 @offer_router.post("", response_model=OfferResponse)
@@ -211,12 +216,12 @@ async def create_offer(
     actor: AuthActor = Depends(require_scopes("offers:write", "approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OfferResponse:
+    existing, fingerprint = await begin_preparation(session, actor, "create_offer", payload)
     thread = await _get_thread_for_actor(session, actor, payload.thread_id)
     listing = await session.get(Listing, thread.listing_id)
     if not listing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Listing not found.")
 
-    existing = await find_existing_approval(session, actor.user.id, payload.idempotency_key)
     if existing and existing.resource_type == "offer" and existing.resource_id:
         offer = await session.get(Offer, existing.resource_id)
         if offer:
@@ -248,6 +253,7 @@ async def create_offer(
         diff_payload={"amount_cents": payload.amount_cents, "note": payload.note},
         action_payload={"offer_id": offer.id},
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
     offer.approval_request_id = approval.id
     await session.commit()
@@ -262,13 +268,14 @@ async def accept_offer(
     actor: AuthActor = Depends(require_scopes("offers:write", "approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OfferResponse:
+    existing, fingerprint = await begin_preparation(session, actor, "accept_offer", payload, offer_id=offer_id)
     offer = await _get_offer_for_actor(session, actor, offer_id)
     if offer.created_by_user_id == actor.user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot accept your own offer.")
-    existing = await find_existing_approval(session, actor.user.id, payload.idempotency_key)
     if existing:
+        session.info["prepared_approval_id"] = existing.id
         return OfferResponse.model_validate(offer)
-    await create_approval_request(
+    approval = await create_approval_request(
         session,
         owner_user_id=actor.user.id,
         requested_by_user_id=actor.user.id,
@@ -280,7 +287,9 @@ async def accept_offer(
         diff_payload={"amount_cents": offer.amount_cents, "from_status": offer.status, "to_status": OfferStatus.accepted.value},
         action_payload={"offer_id": offer.id},
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
+    session.info["prepared_approval_id"] = approval.id
     await session.commit()
     return OfferResponse.model_validate(offer)
 
@@ -292,13 +301,14 @@ async def reject_offer(
     actor: AuthActor = Depends(require_scopes("offers:write", "approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OfferResponse:
+    existing, fingerprint = await begin_preparation(session, actor, "reject_offer", payload, offer_id=offer_id)
     offer = await _get_offer_for_actor(session, actor, offer_id)
     if offer.created_by_user_id == actor.user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot reject your own offer.")
-    existing = await find_existing_approval(session, actor.user.id, payload.idempotency_key)
     if existing:
+        session.info["prepared_approval_id"] = existing.id
         return OfferResponse.model_validate(offer)
-    await create_approval_request(
+    approval = await create_approval_request(
         session,
         owner_user_id=actor.user.id,
         requested_by_user_id=actor.user.id,
@@ -310,7 +320,9 @@ async def reject_offer(
         diff_payload={"from_status": offer.status, "to_status": OfferStatus.rejected.value},
         action_payload={"offer_id": offer.id},
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
+    session.info["prepared_approval_id"] = approval.id
     await session.commit()
     return OfferResponse.model_validate(offer)
 
@@ -322,11 +334,11 @@ async def counter_offer(
     actor: AuthActor = Depends(require_scopes("offers:write", "approvals:write")),
     session: AsyncSession = Depends(get_session),
 ) -> OfferResponse:
+    existing, fingerprint = await begin_preparation(session, actor, "counter_offer", payload, offer_id=offer_id)
     target_offer = await _get_offer_for_actor(session, actor, offer_id)
     if target_offer.created_by_user_id == actor.user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot counter your own offer.")
 
-    existing = await find_existing_approval(session, actor.user.id, payload.idempotency_key)
     if existing and existing.resource_type == "offer" and existing.resource_id:
         offer = await session.get(Offer, existing.resource_id)
         if offer:
@@ -363,6 +375,7 @@ async def counter_offer(
         },
         action_payload={"offer_id": counter.id, "target_offer_id": target_offer.id},
         idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
     )
     counter.approval_request_id = approval.id
     await session.commit()

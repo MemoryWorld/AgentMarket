@@ -51,6 +51,10 @@ fastmcp run app/mcp_server.py:mcp --transport http --port 9000
 
 This exposes the MCP endpoint at `http://localhost:9000/mcp`.
 
+Agents prepare changes with scoped PATs; sellers decide proposals with their
+interactive sign-in token. See [approval integrity and verification](backend/APPROVALS.md)
+for REST/MCP scope rules, replay behavior, transaction boundaries and legacy migration.
+
 ### Docker services
 
 ```bash

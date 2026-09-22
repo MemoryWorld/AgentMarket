@@ -565,10 +565,18 @@ export function ControlRoom() {
       if (!token) {
         throw new Error("Connect a seller token before deciding approvals.");
       }
-      const decision = await readJson<ApprovalDecision>(apiUrl(`/approval-requests/${approvalId}/${action}`), {
-        method: "POST",
-        headers: tokenHeaders(token),
-      });
+      let decision: ApprovalDecision;
+      try {
+        decision = await readJson<ApprovalDecision>(apiUrl(`/approval-requests/${approvalId}/${action}`), {
+          method: "POST",
+          headers: tokenHeaders(token),
+        });
+      } catch (error) {
+        // Failed execution can still create a receipt and change approval state.
+        // Preserve the action error if refreshing the workspace also fails.
+        await refreshWorkspace(token, activeThreadId).catch(() => undefined);
+        throw error;
+      }
       await refreshWorkspace(token, activeThreadId);
       setStatus(
         action === "approve"
@@ -589,10 +597,10 @@ export function ControlRoom() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="eyebrow text-[var(--color-sea)]">Seller Control Room</p>
-              <h1 className="display-title mt-3 text-5xl text-[var(--color-ink)] md:text-6xl">Prepare with agents. Confirm as the seller. Execute once.</h1>
+              <h1 className="display-title mt-3 text-5xl text-[var(--color-ink)] md:text-6xl">Prepare with agents. Confirm as the seller. Track each result.</h1>
               <p className="mt-4 text-base leading-8 text-[rgba(18,38,63,0.76)]">
-                This surface is the human approval inbox for phase two. Codex, Claude Code, OpenClaw, and Hermes can draft actions through PAT scopes, but publishing,
-                repricing, messaging, offers, and fulfillment stay approval-gated here.
+                Review publishing, price, message, offer, and fulfillment changes proposed by your agents.
+                Sign in as the seller to approve or reject each request and inspect its execution receipt.
               </p>
             </div>
             <div className="sun-panel max-w-md rounded-[1.8rem] p-5">
@@ -613,14 +621,14 @@ export function ControlRoom() {
                 <span className="step-pill">01</span>
                 <div>
                   <p className="font-semibold">Load seller token</p>
-                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Use the same browser token from `/sell`, or paste a PAT/access token manually.</p>
+                  <p className="text-sm text-[rgba(18,38,63,0.66)]">Use your seller sign-in token from the Sell page. Personal access tokens cannot approve requests or issue agent credentials.</p>
                 </div>
               </div>
               <textarea
                 className="field mt-4 min-h-28"
                 value={tokenInput}
                 onChange={(event) => setTokenInput(event.target.value)}
-                placeholder="Paste bearer token"
+                placeholder="Paste seller sign-in token"
               />
               <div className="mt-4 flex flex-wrap gap-3">
                 <button className="button-primary" type="submit" disabled={!!busyAction}>
@@ -1071,7 +1079,7 @@ export function ControlRoom() {
 
           <div className="surface-card rounded-[2rem] p-6">
             <p className="eyebrow text-[var(--color-coral)]">Action Receipts</p>
-            <h2 className="display-title mt-2 text-4xl">Immutable execution trail.</h2>
+            <h2 className="display-title mt-2 text-4xl">Execution history.</h2>
             <div className="mt-5 space-y-4">
               {recentReceipts.length ? recentReceipts.map((receipt) => (
                 <article key={receipt.id} className="soft-panel rounded-[1.5rem] p-4">
@@ -1089,6 +1097,11 @@ export function ControlRoom() {
                   <pre className="mt-4 overflow-x-auto rounded-[1.2rem] bg-[rgba(18,38,63,0.04)] p-4 text-xs leading-6 text-[rgba(18,38,63,0.8)]">
                     {formatJson(receipt.result_payload)}
                   </pre>
+                  {receipt.error_message ? (
+                    <p className="mt-3 break-words text-sm text-[var(--color-coral)]">
+                      Failure: {receipt.error_message}
+                    </p>
+                  ) : null}
                 </article>
               )) : (
                 <div className="rounded-[1.5rem] border border-dashed border-[rgba(18,38,63,0.16)] p-8 text-sm text-[rgba(18,38,63,0.66)]">

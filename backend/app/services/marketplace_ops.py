@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -33,6 +36,10 @@ def validate_publishable_draft(draft: ListingDraft) -> None:
 
 
 async def publish_draft_listing(session: AsyncSession, seller_id: str, draft: ListingDraft) -> Listing:
+    if draft.seller_id != seller_id:
+        raise ValueError("Draft not found.")
+    if draft.status == ListingWorkflowStatus.published.value:
+        raise ValueError("Draft has already been published.")
     validate_publishable_draft(draft)
 
     base_slug = slugify(draft.title or "listing")
@@ -69,3 +76,20 @@ async def publish_draft_listing(session: AsyncSession, seller_id: str, draft: Li
         image.listing_id = listing.id
     draft.status = ListingWorkflowStatus.published.value
     return listing
+
+
+def draft_snapshot(draft: ListingDraft) -> str:
+    """Bind confirmation to every publishable field and image, not mutable IDs."""
+    values = {column.name: getattr(draft, column.name) for column in draft.__table__.columns
+              if column.name not in {"created_at", "updated_at"}}
+    values["images"] = [
+        {column.name: getattr(image, column.name) for column in image.__table__.columns if column.name != "created_at"}
+        for image in sorted(draft.images, key=lambda image: image.id)
+    ]
+    return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def validate_fulfillment_transition(current: str, target: str) -> None:
+    allowed = {"paid": {"confirmed", "shipped"}, "confirmed": {"shipped"}, "shipped": {"delivered"}}
+    if target not in allowed.get(current, set()):
+        raise ValueError("Invalid fulfillment transition.")
