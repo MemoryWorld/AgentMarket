@@ -25,6 +25,37 @@ jobs:
           source .venv/bin/activate
           DATABASE_URL=sqlite+aiosqlite:///./data/ci.db pytest
 
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: marketplace
+          POSTGRES_PASSWORD: marketplace
+          POSTGRES_DB: marketplace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketplace -d marketplace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Verify PostgreSQL migrations and API workflow
+        env:
+          POSTGRES_TEST_URL: postgresql+asyncpg://marketplace:marketplace@127.0.0.1:5432/marketplace
+        run: python scripts/verify_postgres.py
+
   web:
     runs-on: ubuntu-latest
     defaults:
