@@ -61,4 +61,39 @@ for REST/MCP scope rules, replay behavior, transaction boundaries and legacy mig
 docker compose up postgres redis
 ```
 
-Switch `DATABASE_URL` to Postgres when needed.
+The backend includes `asyncpg==0.31.0`. Use the explicit async SQLAlchemy URL
+when switching from SQLite to PostgreSQL:
+
+```bash
+export DATABASE_URL='postgresql+asyncpg://marketplace:marketplace@127.0.0.1:5432/marketplace'
+# PowerShell: $env:DATABASE_URL='postgresql+asyncpg://marketplace:marketplace@127.0.0.1:5432/marketplace'
+cd backend
+uvicorn app.main:app
+```
+
+The example credentials match the local Compose service; supply separate
+credentials for other environments. Startup applies Alembic migrations.
+Changing the URL selects a different database; it does not transfer SQLite data.
+
+### PostgreSQL API verification
+
+On a disposable PostgreSQL server, use a role with `CREATEDB` permission:
+
+```bash
+cd backend
+export POSTGRES_TEST_URL='postgresql+asyncpg://marketplace:marketplace@127.0.0.1:5432/marketplace'
+# PowerShell uses $env:POSTGRES_TEST_URL='postgresql+asyncpg://...'
+python scripts/verify_postgres.py
+```
+
+The script creates a uniquely named test database, migrates it from an empty
+schema, exercises registration, draft review/publication, mock checkout,
+scoped grants, human approval, replay and receipts, then removes only that
+generated database. It never migrates or clears the database named in the URL.
+Model calls and payment are explicitly mocked; no `.env` file is loaded.
+CI runs the same check against PostgreSQL 16 in addition to the SQLite suite.
+
+Locally verified on 2026-09-23 with PostgreSQL 16.13 and asyncpg 0.31.0:
+all four migrations and twelve API checks passed. This is functional verification,
+not a concurrency benchmark or production deployment claim.
+Driver reference: [asyncpg release](https://pypi.org/project/asyncpg/0.31.0/).
